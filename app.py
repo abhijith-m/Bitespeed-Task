@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-import logging
 from flask import Flask, request
 from db_helper import Db
 
@@ -25,25 +24,19 @@ def process_identity_request(request_data):
     :return: result json with 200 status code
     """
     if not (request_data["phoneNumber"] or request_data["email"]):
-        """
-        Case 1: Bad request
-        """
+        # Case 1: Bad request
         return get_result_records(None)
 
     rows = db.get_matching_rows(request_data["phoneNumber"], request_data["email"])
     if len(rows) == 0:
-        """
-        Case 2: Fresh record, create new row
-        """
+        # Case 2: Fresh record, create new row
         primary_id = create_record(request_data, None, 'primary')
         return get_result_records(primary_id)
 
     if not (request_data["phoneNumber"] and request_data["email"]):
-        """
-        Case 3: No new Information
-        Request with just EXISTING email or phoneNumber
-        Get the primary record id of the oldest record
-        """
+        # Case 3: No new Information
+        # Request with just EXISTING email or phoneNumber
+        # Get the primary record id of the oldest record
         for rec_id, ph_num, email, linked_id in rows:
             primary_id = linked_id if linked_id else rec_id
             return get_result_records(primary_id)
@@ -58,10 +51,8 @@ def process_identity_request(request_data):
             related_ids.add(primary_id)
 
         if request_data["phoneNumber"] == ph_num and request_data["email"] == email:
-            """
-            Case 4(a) : No new Information
-            Request with just EXISTING email and phoneNumber -> Nothing to update
-            """
+            # Case 4(a) : No new Information
+            # Request with just EXISTING email and phoneNumber -> Nothing to update
             new_info = False
             break
 
@@ -77,14 +68,10 @@ def process_identity_request(request_data):
     if new_info:
         link_records = phone_exists and email_exists
         if link_records:
-            """
-            Case 4(b): Link two different records that are already present
-            """
+            # Case 4(b): Link two different records that are already present
             primary_id = update_record(related_ids)
         else:
-            """
-            Case 4(c): Create new record and link it to oldest related primary record
-            """
+            # Case 4(c): Create new record and link it to the oldest related primary record
             primary_id = create_record(request_data, primary_id, 'secondary')
 
     return get_result_records(primary_id)
