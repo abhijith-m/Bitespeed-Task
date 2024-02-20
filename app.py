@@ -25,42 +25,72 @@ def process_identity_request(request_data):
     :return: result json with 200 status code
     """
     if not (request_data["phoneNumber"] or request_data["email"]):
+        """
+        Case 1: Bad request
+        """
         return get_result_records(None)
 
-    primary_id, link_precedence = None, 'primary'
+    rows = db.get_matching_rows(request_data["phoneNumber"], request_data["email"])
+    if len(rows) == 0:
+        """
+        Case 2: Fresh record, create new row
+        """
+        primary_id = create_record(request_data, None, 'primary')
+        return get_result_records(primary_id)
+
+    if not (request_data["phoneNumber"] and request_data["email"]):
+        """
+        Case 3: No new Information
+        Request with just EXISTING email or phoneNumber
+        Get the primary record id of the oldest record
+        """
+        for rec_id, ph_num, email, linked_id in rows:
+            primary_id = linked_id if linked_id else rec_id
+            return get_result_records(primary_id)
+
+    primary_id= None
     new_info = True
     related_ids = set()
-    rows = db.get_matching_rows(request_data["phoneNumber"], request_data["email"])
-
     email_exists, phone_exists = False, False
     for rec_id, ph_num, email, linked_id in rows:
         if not primary_id:
             primary_id = linked_id if linked_id else rec_id
-            link_precedence = 'secondary'
             related_ids.add(primary_id)
+
         if request_data["phoneNumber"] == ph_num and request_data["email"] == email:
+            """
+            Case 4(a) : No new Information
+            Request with just EXISTING email and phoneNumber -> Nothing to update
+            """
             new_info = False
             break
+
         if linked_id:
             related_ids.add(linked_id)
         related_ids.add(rec_id)
-        # When either phoneNumber or email field is None
+
         if ph_num == request_data["phoneNumber"]:
             phone_exists = True
         if email == request_data["email"]:
             email_exists = True
 
-    new_info = new_info and not ((request_data["phoneNumber"] is None and email_exists) or
-                                 (request_data["email"] is None and phone_exists))
-
     if new_info:
-        link_records = email_exists and phone_exists
-        primary_id = upsert_record(request_data, link_records, primary_id, link_precedence, related_ids)
+        link_records = phone_exists and email_exists
+        if link_records:
+            """
+            Case 4(b): Link two different records that are already present
+            """
+            primary_id = update_record(related_ids)
+        else:
+            """
+            Case 4(c): Create new record and link it to oldest related primary record
+            """
+            primary_id = create_record(request_data, primary_id, 'secondary')
 
     return get_result_records(primary_id)
 
 
-def upsert_record(request_data, link_records, primary_id, link_precedence, related_ids):
+def update_record(related_ids):
     """
     Gets 2nd set of related records that could've been missed in the calling fn,
     A new record is created or link of a record is updated
@@ -71,24 +101,26 @@ def upsert_record(request_data, link_records, primary_id, link_precedence, relat
     :param related_ids:
     :return: id of the primary record
     """
-    if link_records and request_data["phoneNumber"] and request_data["email"]:
-        rows = db.get_oldest_rec(list(related_ids))
-        oldest_rec = None
+    rows = db.get_oldest_rec(list(related_ids))
+    oldest_rec = None
 
-        for (rec_id,) in rows:
-            if not oldest_rec:
-                oldest_rec = rec_id
-                if oldest_rec in related_ids:
-                    related_ids.remove(oldest_rec)
-                continue
-            related_ids.add(rec_id)
-        db.update_record(oldest_rec, list(related_ids))
-        primary_id = oldest_rec
-    else:
-        new_rec_id = db.create_record(request_data["phoneNumber"], request_data["email"], primary_id, link_precedence)
-        if not primary_id:
-            primary_id = new_rec_id
+    for (rec_id,) in rows:
+        if not oldest_rec:
+            oldest_rec = rec_id
+            if oldest_rec in related_ids:
+                related_ids.remove(oldest_rec)
+            continue
+        related_ids.add(rec_id)
+    db.update_record(oldest_rec, list(related_ids))
+    primary_id = oldest_rec
     return primary_id
+
+def create_record(request_data, primary_id, link_precedence):
+    new_rec_id = db.create_record(request_data["phoneNumber"], request_data["email"], primary_id, link_precedence)
+    if not primary_id:
+        primary_id = new_rec_id
+    return primary_id
+
 
 def get_result_records(primary_id):
     """
@@ -115,6 +147,7 @@ def get_result_records(primary_id):
 
 
 def build_result(primary_id, emails, ph_nums, sec_ids):
+    status_code = 200 if primary_id else 400
     return {
         "contact":
             {
@@ -123,4 +156,4 @@ def build_result(primary_id, emails, ph_nums, sec_ids):
                 "phoneNumbers": ph_nums,
                 "secondaryContactIds": sec_ids
             }
-    }, 200
+    }, status_code
